@@ -1,6 +1,7 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
 import { LandingPage } from '../features/landing/LandingPage';
 import { LoginPage } from '../features/auth/LoginPage';
+import { RegisterPage } from '../features/auth/RegisterPage';
 import { AppLayout } from '../shared/ui/AppLayout';
 import { RoleGuard } from '../shared/ui/RoleGuard';
 
@@ -25,8 +26,9 @@ export const router = createBrowserRouter([
   // Public Quiet Luxury Single-Page Landing Experience
   { path: '/', element: <LandingPage /> },
 
-  // Public Auth Route
+  // Public Auth Routes
   { path: '/login', element: <LoginPage /> },
+  { path: '/register', element: <RegisterPage /> },
 
   // Protected Portal App Shell
   {
@@ -67,5 +69,5 @@ export const router = createBrowserRouter([
       },
     ],
   },
-  { path: '*', element: <Navigate to="/" replace /> },
+ { path: '*', element: <Navigate to="/" replace /> },
 ]);
