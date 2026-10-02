@@ -1,7 +1,10 @@
 import { createBrowserRouter, Navigate } from 'react-router-dom';
+
 import { LandingPage } from '../features/landing/LandingPage';
 import { LoginPage } from '../features/auth/LoginPage';
 import { RegisterPage } from '../features/auth/RegisterPage';
+import { VerifyOtpPage } from '../features/auth/VerifyOtpPage';
+
 import { AppLayout } from '../shared/ui/AppLayout';
 import { RoleGuard } from '../shared/ui/RoleGuard';
 
@@ -23,38 +26,85 @@ import { ManagerUsersPage } from '../features/manager/ManagerUsersPage';
 import { ManagerReportsPage } from '../features/manager/ManagerReportsPage';
 
 export const router = createBrowserRouter([
-  // Public Quiet Luxury Single-Page Landing Experience
-  { path: '/', element: <LandingPage /> },
+  // =========================================================
+  // PUBLIC ROUTES
+  // =========================================================
 
-  // Public Auth Routes
-  { path: '/login', element: <LoginPage /> },
-  { path: '/register', element: <RegisterPage /> },
+  // Landing Page
+  {
+    path: '/',
+    element: <LandingPage />,
+  },
 
-  // Protected Portal App Shell
+  // Authentication
+  {
+    path: '/login',
+    element: <LoginPage />,
+  },
+  {
+    path: '/register',
+    element: <RegisterPage />,
+  },
+
+  // SCRUM-40
+  // Handoff sang luồng xác thực OTP sau khi đăng ký thành công
+  {
+    path: '/verify-otp',
+    element: <VerifyOtpPage />,
+  },
+
+  // =========================================================
+  // PROTECTED PORTAL
+  // =========================================================
   {
     element: <AppLayout />,
-    children: [
-      { path: '/portal', element: <Navigate to="/member/dashboard" replace /> },
 
-      // Group Member Routes (US01, US03, US04, US05)
+    children: [
+      // Portal default redirect
       {
         element: <RoleGuard allowedRoles={['MEMBER', 'MANAGER']} />,
         children: [
-          { path: '/member/dashboard', element: <MemberDashboardPage /> },
-          { path: '/member/profile', element: <MemberProfilePage /> },
-          { path: '/member/classes', element: <MemberClassesPage /> },
-          { path: '/member/card', element: <MemberCardPage /> },
+          {
+            path: '/member/dashboard',
+            element: <MemberDashboardPage />,
+          },
+          {
+            path: '/member/profile',
+            element: <MemberProfilePage />,
+          },
+          {
+            path: '/member/classes',
+            element: <MemberClassesPage />,
+          },
+          {
+            path: '/member/card',
+            element: <MemberCardPage />,
+          },
         ],
       },
 
-      // Group Staff / Coach Routes (US02, US04, US05)
+      // =====================================================
+      // STAFF / COACH ROUTES
+      // =====================================================
       {
         element: <RoleGuard allowedRoles={['STAFF', 'COACH', 'MANAGER']} />,
         children: [
-          { path: '/staff/reception', element: <StaffReceptionPage /> },
-          { path: '/staff/check-in', element: <StaffCheckInPage /> },
-          { path: '/staff/classes', element: <StaffClassesPage /> },
-          { path: '/staff/attendance', element: <CoachAttendancePage /> },
+          {
+            path: '/staff/reception',
+            element: <StaffReceptionPage />,
+          },
+          {
+            path: '/staff/check-in',
+            element: <StaffCheckInPage />,
+          },
+          {
+            path: '/staff/classes',
+            element: <StaffClassesPage />,
+          },
+          {
+            path: '/staff/attendance',
+            element: <CoachAttendancePage />,
+          },
         ],
       },
 
@@ -69,5 +119,12 @@ export const router = createBrowserRouter([
       },
     ],
   },
- { path: '*', element: <Navigate to="/" replace /> },
+
+  // =========================================================
+  // FALLBACK
+  // =========================================================
+  {
+    path: '*',
+    element: <Navigate to="/" replace />,
+  },
 ]);
