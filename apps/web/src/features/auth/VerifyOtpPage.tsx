@@ -7,17 +7,30 @@ import {
 import {
   Link,
   useLocation,
+  useNavigate,
 } from 'react-router-dom';
+
+import {
+  ApiClientError,
+  sendOtpApi,
+  verifyOtpApi,
+} from '../../shared/api/client';
 
 interface VerifyOtpLocationState {
   target?: string;
 }
 
 const OTP_LENGTH = 6;
+
+// OTP có hiệu lực 5 phút.
 const OTP_EXPIRE_SECONDS = 5 * 60;
+
+// Chỉ được gửi lại OTP sau mỗi 60 giây.
+const RESEND_COOLDOWN_SECONDS = 60;
 
 export function VerifyOtpPage() {
   const location = useLocation();
+  const navigate = useNavigate();
 
   const state =
     location.state as VerifyOtpLocationState | null;
@@ -25,64 +38,138 @@ export function VerifyOtpPage() {
   const target = state?.target;
 
   // Lưu 6 số OTP.
+  // Ví dụ: ['1', '2', '3', '4', '5', '6']
   const [otp, setOtp] = useState<string[]>(
     Array(OTP_LENGTH).fill(''),
   );
 
-  // Thời gian còn lại của OTP.
+  // Thời gian OTP còn hiệu lực.
   const [timeLeft, setTimeLeft] = useState(
     OTP_EXPIRE_SECONDS,
   );
 
-  // Dùng ref để focus từng ô OTP.
+  // Thời gian phải chờ trước khi resend.
+  const [resendCooldown, setResendCooldown] =
+    useState(RESEND_COOLDOWN_SECONDS);
+
+  // Trạng thái khi đang gọi API verify.
+  const [isVerifying, setIsVerifying] =
+    useState(false);
+
+  // Trạng thái khi đang gọi API resend.
+  const [isResending, setIsResending] =
+    useState(false);
+
+  // Xác thực thành công hay chưa.
+  const [isVerified, setIsVerified] =
+    useState(false);
+
+  // Thông báo lỗi.
+  const [errorMessage, setErrorMessage] =
+    useState('');
+
+  // Thông báo thành công.
+  const [successMessage, setSuccessMessage] =
+    useState('');
+
+  // Lưu reference của 6 ô input
+  // để có thể tự động focus.
   const inputRefs =
     useRef<Array<HTMLInputElement | null>>([]);
 
   const isExpired = timeLeft === 0;
 
-  // Countdown mỗi 1 giây.
+  // Ghép 6 ô thành một chuỗi.
+  // Ví dụ: ['1','2','3','4','5','6']
+  // thành "123456".
+  const otpCode = otp.join('');
+
+  const isOtpComplete =
+    otpCode.length === OTP_LENGTH;
+
+  // ============================================================
+  // OTP COUNTDOWN - 5 PHÚT
+  // ============================================================
+
   useEffect(() => {
-    if (timeLeft <= 0) {
+    if (
+      timeLeft <= 0 ||
+      isVerified
+    ) {
       return;
     }
 
-    const timer = window.setInterval(() => {
+    const timer = window.setTimeout(() => {
       setTimeLeft((currentTime) =>
         Math.max(currentTime - 1, 0),
       );
     }, 1000);
 
     return () => {
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
     };
-  }, [timeLeft]);
+  }, [timeLeft, isVerified]);
 
-  // Xử lý khi nhập một số OTP.
+  // ============================================================
+  // RESEND COOLDOWN - 60 GIÂY
+  // ============================================================
+
+  useEffect(() => {
+    if (
+      resendCooldown <= 0 ||
+      isVerified
+    ) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setResendCooldown((currentTime) =>
+        Math.max(currentTime - 1, 0),
+      );
+    }, 1000);
+
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [resendCooldown, isVerified]);
+
+  // ============================================================
+  // NHẬP OTP
+  // ============================================================
+
   const handleOtpChange = (
     index: number,
     value: string,
   ) => {
+    // Chỉ cho phép nhập số.
     const digit = value.replace(/\D/g, '');
 
+    // Nếu xóa số.
     if (!digit) {
       const newOtp = [...otp];
+
       newOtp[index] = '';
+
       setOtp(newOtp);
+
       return;
     }
 
     const newOtp = [...otp];
+
+    // Chỉ lấy một số cuối cùng.
     newOtp[index] = digit.slice(-1);
 
     setOtp(newOtp);
 
-    // Nhập xong thì chuyển sang ô kế tiếp.
+    // Nhập xong thì tự động sang ô kế tiếp.
     if (index < OTP_LENGTH - 1) {
       inputRefs.current[index + 1]?.focus();
     }
   };
 
-  // Nếu bấm Backspace ở ô trống thì quay về ô trước.
+  // Nếu bấm Backspace ở ô trống,
+  // quay về ô phía trước.
   const handleKeyDown = (
     index: number,
     event: React.KeyboardEvent<HTMLInputElement>,
@@ -96,14 +183,152 @@ export function VerifyOtpPage() {
     }
   };
 
-  // Chuyển giây thành dạng 05:00, 04:59...
-  const formatTime = (seconds: number) => {
-    const minutes = Math.floor(seconds / 60);
-    const remainSeconds = seconds % 60;
+  // ============================================================
+  // VERIFY OTP
+  // ============================================================
 
-    return `${String(minutes).padStart(2, '0')}:${String(
-      remainSeconds,
-    ).padStart(2, '0')}`;
+  const handleVerifyOtp = async () => {
+    if (!target) {
+      setErrorMessage(
+        'Không tìm thấy email cần xác thực.',
+      );
+      return;
+    }
+
+    if (!isOtpComplete) {
+      setErrorMessage(
+        'Vui lòng nhập đủ 6 số OTP.',
+      );
+      return;
+    }
+
+    if (isExpired) {
+      setErrorMessage(
+        'Mã OTP đã hết hạn. Vui lòng gửi lại mã mới.',
+      );
+      return;
+    }
+
+    setErrorMessage('');
+    setSuccessMessage('');
+    setIsVerifying(true);
+
+    try {
+      const response = await verifyOtpApi(
+        target,
+        otpCode,
+      );
+
+      if (response.isVerified) {
+        setIsVerified(true);
+
+        setSuccessMessage(
+          response.message ||
+            'Xác thực thành công. Tài khoản đã được kích hoạt.',
+        );
+      }
+    } catch (error) {
+      if (error instanceof ApiClientError) {
+        setErrorMessage(error.message);
+
+        // Nếu backend báo OTP hết hạn hoặc đã nhập sai
+        // quá số lần cho phép thì coi OTP hiện tại
+        // không còn sử dụng được nữa.
+        if (
+          error.code === 'OTP_EXPIRED' ||
+          error.code === 'MAX_ATTEMPTS'
+        ) {
+          setTimeLeft(0);
+        }
+      } else {
+        setErrorMessage(
+          'Không thể xác thực OTP. Vui lòng thử lại.',
+        );
+      }
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  // ============================================================
+  // RESEND OTP
+  // ============================================================
+
+  const handleResendOtp = async () => {
+    if (!target) {
+      setErrorMessage(
+        'Không tìm thấy email cần gửi OTP.',
+      );
+      return;
+    }
+
+    // Chưa đủ 60 giây thì không được resend.
+    if (resendCooldown > 0) {
+      return;
+    }
+
+    setErrorMessage('');
+    setSuccessMessage('');
+    setIsResending(true);
+
+    try {
+      await sendOtpApi(target);
+
+      // Xóa mã đang nhập trên giao diện.
+      setOtp(
+        Array(OTP_LENGTH).fill(''),
+      );
+
+      // OTP mới có hiệu lực lại 5 phút.
+      setTimeLeft(
+        OTP_EXPIRE_SECONDS,
+      );
+
+      // Resend xong phải chờ tiếp 60 giây.
+      setResendCooldown(
+        RESEND_COOLDOWN_SECONDS,
+      );
+
+      setSuccessMessage(
+        'Mã OTP mới đã được gửi.',
+      );
+
+      // Chờ giao diện render lại rồi
+      // focus về ô OTP đầu tiên.
+      window.setTimeout(() => {
+        inputRefs.current[0]?.focus();
+      }, 0);
+    } catch (error) {
+      if (error instanceof ApiClientError) {
+        setErrorMessage(error.message);
+      } else {
+        setErrorMessage(
+          'Không thể gửi lại OTP. Vui lòng thử lại.',
+        );
+      }
+    } finally {
+      setIsResending(false);
+    }
+  };
+
+  // ============================================================
+  // FORMAT THỜI GIAN
+  // ============================================================
+
+  const formatTime = (seconds: number) => {
+    const minutes =
+      Math.floor(seconds / 60);
+
+    const remainSeconds =
+      seconds % 60;
+
+    return `${String(minutes).padStart(
+      2,
+      '0',
+    )}:${String(remainSeconds).padStart(
+      2,
+      '0',
+    )}`;
   };
 
   return (
@@ -179,6 +404,38 @@ export function VerifyOtpPage() {
           {target ?? 'email đăng ký của bạn'}
         </p>
 
+        {errorMessage && (
+          <div
+            style={{
+              padding: '12px',
+              marginBottom: '18px',
+              borderRadius: '6px',
+              background: '#FFF1F0',
+              color: '#B42318',
+              fontSize: '0.82rem',
+              fontFamily: 'var(--font-sans)',
+            }}
+          >
+            {errorMessage}
+          </div>
+        )}
+
+        {successMessage && (
+          <div
+            style={{
+              padding: '12px',
+              marginBottom: '18px',
+              borderRadius: '6px',
+              background: '#F0F9F4',
+              color: '#157347',
+              fontSize: '0.82rem',
+              fontFamily: 'var(--font-sans)',
+            }}
+          >
+            {successMessage}
+          </div>
+        )}
+
         <div
           style={{
             display: 'flex',
@@ -191,13 +448,18 @@ export function VerifyOtpPage() {
             <input
               key={index}
               ref={(element) => {
-                inputRefs.current[index] = element;
+                inputRefs.current[index] =
+                  element;
               }}
               type="text"
               inputMode="numeric"
               maxLength={1}
               value={digit}
-              disabled={isExpired}
+              disabled={
+                isExpired ||
+                isVerifying ||
+                isVerified
+              }
               onChange={(event) =>
                 handleOtpChange(
                   index,
@@ -205,21 +467,27 @@ export function VerifyOtpPage() {
                 )
               }
               onKeyDown={(event) =>
-                handleKeyDown(index, event)
+                handleKeyDown(
+                  index,
+                  event,
+                )
               }
               aria-label={`OTP digit ${index + 1}`}
               style={{
                 width: '48px',
                 height: '56px',
-                border: '1px solid #D8D2CC',
+                border:
+                  '1px solid #D8D2CC',
                 borderRadius: '6px',
                 textAlign: 'center',
                 fontSize: '1.4rem',
                 fontWeight: 600,
                 color: '#1A1614',
-                background: isExpired
-                  ? '#F3F0EC'
-                  : '#FFFFFF',
+                background:
+                  isExpired ||
+                  isVerified
+                    ? '#F3F0EC'
+                    : '#FFFFFF',
                 outline: 'none',
                 boxSizing: 'border-box',
               }}
@@ -244,43 +512,132 @@ export function VerifyOtpPage() {
               )}`}
         </p>
 
-        <button
-          type="button"
-          disabled={!isExpired}
-          style={{
-            width: '100%',
-            height: '48px',
-            border: 'none',
-            borderRadius: '6px',
-            background: isExpired
-              ? '#211C18'
-              : '#D8D2CC',
-            color: '#FFFFFF',
-            fontFamily: 'var(--font-sans)',
-            fontSize: '0.82rem',
-            fontWeight: 600,
-            letterSpacing: '0.08em',
-            cursor: isExpired
-              ? 'pointer'
-              : 'not-allowed',
-            marginBottom: '24px',
-          }}
-        >
-          GỬI LẠI MÃ
-        </button>
+        {!isVerified && (
+          <button
+            type="button"
+            onClick={handleVerifyOtp}
+            disabled={
+              !isOtpComplete ||
+              isExpired ||
+              isVerifying ||
+              isResending ||
+              !target
+            }
+            style={{
+              width: '100%',
+              height: '48px',
+              border: 'none',
+              borderRadius: '6px',
+              background:
+                isOtpComplete &&
+                !isExpired &&
+                !isVerifying &&
+                !isResending &&
+                target
+                  ? '#211C18'
+                  : '#D8D2CC',
+              color: '#FFFFFF',
+              fontFamily: 'var(--font-sans)',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+              letterSpacing: '0.08em',
+              cursor:
+                isOtpComplete &&
+                !isExpired &&
+                !isVerifying &&
+                !isResending &&
+                target
+                  ? 'pointer'
+                  : 'not-allowed',
+              marginBottom: '12px',
+            }}
+          >
+            {isVerifying
+              ? 'ĐANG XÁC THỰC...'
+              : 'XÁC THỰC OTP'}
+          </button>
+        )}
 
-        <Link
-          to="/login"
-          style={{
-            color: '#1A1614',
-            fontFamily: 'var(--font-sans)',
-            fontSize: '0.82rem',
-            fontWeight: 600,
-            textDecoration: 'none',
-          }}
-        >
-          ← Quay lại đăng nhập
-        </Link>
+        {!isVerified && (
+          <button
+            type="button"
+            onClick={handleResendOtp}
+            disabled={
+              resendCooldown > 0 ||
+              isResending ||
+              isVerifying ||
+              !target
+            }
+            style={{
+              width: '100%',
+              height: '48px',
+              border: 'none',
+              borderRadius: '6px',
+              background:
+                resendCooldown === 0 &&
+                !isResending &&
+                !isVerifying &&
+                target
+                  ? '#211C18'
+                  : '#D8D2CC',
+              color: '#FFFFFF',
+              fontFamily: 'var(--font-sans)',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+              letterSpacing: '0.08em',
+              cursor:
+                resendCooldown === 0 &&
+                !isResending &&
+                !isVerifying &&
+                target
+                  ? 'pointer'
+                  : 'not-allowed',
+              marginBottom: '24px',
+            }}
+          >
+            {isResending
+              ? 'ĐANG GỬI...'
+              : resendCooldown > 0
+                ? `GỬI LẠI MÃ (${resendCooldown}s)`
+                : 'GỬI LẠI MÃ'}
+          </button>
+        )}
+
+        {isVerified ? (
+          <button
+            type="button"
+            onClick={() =>
+              navigate('/login')
+            }
+            style={{
+              width: '100%',
+              height: '48px',
+              border: 'none',
+              borderRadius: '6px',
+              background: '#211C18',
+              color: '#FFFFFF',
+              fontFamily: 'var(--font-sans)',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+              cursor: 'pointer',
+            }}
+          >
+            ĐẾN TRANG ĐĂNG NHẬP
+          </button>
+        ) : (
+          <Link
+            to="/login"
+            style={{
+              color: '#1A1614',
+              fontFamily: 'var(--font-sans)',
+              fontSize: '0.82rem',
+              fontWeight: 600,
+              textDecoration: 'none',
+            }}
+          >
+            ← Quay lại đăng nhập
+          </Link>
+        )}
       </section>
     </main>
   );
