@@ -1,9 +1,17 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+
+import {
+  ApiClientError,
+  registerApi,
+  sendOtpApi,
+} from '../../shared/api/client';
 
 export function LuxuryRegisterForm() {
-  const [fullName, setFullName] = useState('');
-  const [identifier, setIdentifier] = useState('');
+  const navigate = useNavigate();
+
+  const [username, setUsername] = useState('');
+  const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
@@ -11,52 +19,156 @@ export function LuxuryRegisterForm() {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
   const [formError, setFormError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  /**
+   * Nếu register thành công nhưng gửi OTP lỗi,
+   * lưu email lại để lần submit sau chỉ gửi lại OTP,
+   * tránh gọi register lần nữa và gặp EMAIL_EXISTS.
+   */
+  const [registeredEmail, setRegisteredEmail] = useState<string | null>(
+    null,
+  );
 
   const hasMinLength = password.length >= 8;
   const hasLetter = /[A-Za-z]/.test(password);
   const hasNumber = /\d/.test(password);
-  const passwordsMatch =
-    confirmPassword.length > 0 && password === confirmPassword;
 
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+  const passwordsMatch =
+    confirmPassword.length > 0 &&
+    password === confirmPassword;
+
+  const isValidEmail = (value: string) => {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+  };
+
+  const getErrorMessage = (error: unknown): string => {
+    if (error instanceof ApiClientError) {
+      return error.message;
+    }
+
+    if (error instanceof TypeError) {
+      return 'Không thể kết nối đến máy chủ. Vui lòng kiểm tra backend và thử lại.';
+    }
+
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    return 'Đã xảy ra lỗi. Vui lòng thử lại.';
+  };
+
+  const handleSubmit = async (
+    e: React.FormEvent<HTMLFormElement>,
+  ) => {
     e.preventDefault();
+
+    if (isSubmitting) {
+      return;
+    }
+
     setFormError('');
 
-    if (!fullName.trim()) {
-      setFormError('Vui lòng nhập họ và tên.');
-      return;
+    const cleanUsername = username.trim();
+    const cleanEmail = email.trim().toLowerCase();
+
+    /*
+     * Nếu tài khoản chưa được tạo thì validate đầy đủ.
+     * Nếu đã register thành công nhưng OTP lỗi,
+     * lần sau chỉ retry sendOtpApi().
+     */
+    if (!registeredEmail) {
+      if (!cleanUsername) {
+        setFormError('Vui lòng nhập tên đăng nhập.');
+        return;
+      }
+
+      if (cleanUsername.length < 3) {
+        setFormError('Tên đăng nhập phải có tối thiểu 3 ký tự.');
+        return;
+      }
+
+      if (!cleanEmail) {
+        setFormError('Vui lòng nhập Email.');
+        return;
+      }
+
+      if (!isValidEmail(cleanEmail)) {
+        setFormError('Email không hợp lệ.');
+        return;
+      }
+
+      if (!password) {
+        setFormError('Vui lòng nhập mật khẩu.');
+        return;
+      }
+
+      if (!hasMinLength || !hasLetter || !hasNumber) {
+        setFormError(
+          'Mật khẩu phải có tối thiểu 8 ký tự, bao gồm chữ và số.',
+        );
+        return;
+      }
+
+      if (!confirmPassword) {
+        setFormError('Vui lòng xác nhận mật khẩu.');
+        return;
+      }
+
+      if (password !== confirmPassword) {
+        setFormError('Mật khẩu xác nhận không khớp.');
+        return;
+      }
     }
 
-    if (!identifier.trim()) {
-      setFormError('Vui lòng nhập Email hoặc Số điện thoại.');
-      return;
-    }
+    setIsSubmitting(true);
 
-    if (!password) {
-      setFormError('Vui lòng nhập mật khẩu.');
-      return;
-    }
+    try {
+      let otpEmail = registeredEmail;
 
-    if (!hasMinLength || !hasLetter || !hasNumber) {
-      setFormError(
-        'Mật khẩu phải có tối thiểu 8 ký tự, bao gồm chữ và số.',
-      );
-      return;
-    }
+      /*
+       * Chỉ gọi register khi tài khoản chưa được tạo.
+       */
+      if (!otpEmail) {
+        await registerApi({
+          username: cleanUsername,
+          email: cleanEmail,
+          password,
+          role: 'MEMBER',
+        });
 
-    if (!confirmPassword) {
-      setFormError('Vui lòng xác nhận mật khẩu.');
-      return;
-    }
+        /*
+         * Register đã thành công.
+         * Lưu lại trước khi gọi OTP để nếu OTP fail
+         * thì không đăng ký lại tài khoản.
+         */
+        otpEmail = cleanEmail;
+        setRegisteredEmail(cleanEmail);
+      }
 
-    if (password !== confirmPassword) {
-      setFormError('Mật khẩu xác nhận không khớp.');
-      return;
-    }
+      /*
+       * SCRUM-40:
+       * đăng ký thành công -> gửi OTP.
+       */
+      await sendOtpApi(otpEmail);
 
-    // SCRUM-37 / F01 chỉ xử lý giao diện và validation frontend.
-    // Register API sẽ được tích hợp ở task tương ứng khi contract sẵn sàng.
+      /*
+       * Chuyển sang màn xác thực OTP.
+       * Mang theo email để US03 biết OTP thuộc tài khoản nào.
+       */
+      navigate('/verify-otp', {
+        state: {
+          target: otpEmail,
+        },
+      });
+    } catch (error: unknown) {
+      setFormError(getErrorMessage(error));
+    } finally {
+      setIsSubmitting(false);
+    }
   };
+
+  const registrationAlreadyCreated = registeredEmail !== null;
 
   return (
     <div
@@ -72,7 +184,12 @@ export function LuxuryRegisterForm() {
         boxSizing: 'border-box',
       }}
     >
-      <div style={{ textAlign: 'center', marginBottom: '28px' }}>
+      <div
+        style={{
+          textAlign: 'center',
+          marginBottom: '28px',
+        }}
+      >
         <div
           style={{
             fontFamily: 'var(--font-sans)',
@@ -123,32 +240,61 @@ export function LuxuryRegisterForm() {
             padding: '10px 14px',
             borderRadius: '4px',
             marginBottom: '18px',
+            lineHeight: 1.5,
           }}
         >
           ⚠️ {formError}
         </div>
       )}
 
+      {registrationAlreadyCreated && formError && (
+        <div
+          style={{
+            background: '#FAF8F5',
+            border: '1px solid rgba(33, 28, 24, 0.08)',
+            color: '#6A635D',
+            fontSize: '0.76rem',
+            padding: '10px 14px',
+            borderRadius: '4px',
+            marginBottom: '18px',
+            lineHeight: 1.6,
+          }}
+        >
+          Tài khoản đã được tạo. Bạn có thể thử gửi lại mã OTP mà
+          không cần đăng ký lại.
+        </div>
+      )}
+
       <form onSubmit={handleSubmit}>
         <div className="portal-form-group">
-          <label className="portal-label">Họ Và Tên</label>
+          <label className="portal-label">
+            Tên Đăng Nhập
+          </label>
+
           <input
             type="text"
             className="portal-input"
-            placeholder="Nhập họ và tên"
-            value={fullName}
-            onChange={(e) => setFullName(e.target.value)}
+            placeholder="Nhập tên đăng nhập"
+            value={username}
+            disabled={registrationAlreadyCreated || isSubmitting}
+            onChange={(e) => setUsername(e.target.value)}
+            autoComplete="username"
           />
         </div>
 
         <div className="portal-form-group">
-          <label className="portal-label">Email Hoặc Số Điện Thoại</label>
+          <label className="portal-label">
+            Email
+          </label>
+
           <input
-            type="text"
+            type="email"
             className="portal-input"
-            placeholder="example@email.com hoặc 0908123456"
-            value={identifier}
-            onChange={(e) => setIdentifier(e.target.value)}
+            placeholder="example@email.com"
+            value={email}
+            disabled={registrationAlreadyCreated || isSubmitting}
+            onChange={(e) => setEmail(e.target.value)}
+            autoComplete="email"
           />
         </div>
 
@@ -161,39 +307,68 @@ export function LuxuryRegisterForm() {
               marginBottom: '6px',
             }}
           >
-            <label className="portal-label" style={{ margin: 0 }}>
+            <label
+              className="portal-label"
+              style={{ margin: 0 }}
+            >
               Mật Khẩu
             </label>
 
             <button
               type="button"
-              onClick={() => setShowPassword(!showPassword)}
+              disabled={
+                registrationAlreadyCreated ||
+                isSubmitting
+              }
+              onClick={() =>
+                setShowPassword(
+                  (current) => !current,
+                )
+              }
               style={{
                 background: 'none',
                 border: 'none',
                 fontSize: '0.72rem',
                 color: '#8C847C',
-                cursor: 'pointer',
+                cursor:
+                  registrationAlreadyCreated ||
+                  isSubmitting
+                    ? 'default'
+                    : 'pointer',
                 padding: 0,
               }}
             >
-              {showPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+              {showPassword
+                ? 'Ẩn mật khẩu'
+                : 'Hiện mật khẩu'}
             </button>
           </div>
 
           <input
-            type={showPassword ? 'text' : 'password'}
+            type={
+              showPassword
+                ? 'text'
+                : 'password'
+            }
             className="portal-input"
             placeholder="Tối thiểu 8 ký tự, có chữ và số"
             value={password}
-            onChange={(e) => setPassword(e.target.value)}
+            disabled={
+              registrationAlreadyCreated ||
+              isSubmitting
+            }
+            onChange={(e) =>
+              setPassword(e.target.value)
+            }
+            autoComplete="new-password"
           />
         </div>
 
         <div
           style={{
             background: '#FAF8F5',
-            border: '1px solid rgba(33, 28, 24, 0.08)',
+            border:
+              '1px solid rgba(33, 28, 24, 0.08)',
             borderRadius: '6px',
             padding: '12px 14px',
             marginTop: '-8px',
@@ -204,9 +379,20 @@ export function LuxuryRegisterForm() {
             color: '#6A635D',
           }}
         >
-          <div>{hasMinLength ? '✓' : '○'} Tối thiểu 8 ký tự</div>
-          <div>{hasLetter ? '✓' : '○'} Có ít nhất một chữ cái</div>
-          <div>{hasNumber ? '✓' : '○'} Có ít nhất một chữ số</div>
+          <div>
+            {hasMinLength ? '✓' : '○'} Tối thiểu
+            8 ký tự
+          </div>
+
+          <div>
+            {hasLetter ? '✓' : '○'} Có ít nhất
+            một chữ cái
+          </div>
+
+          <div>
+            {hasNumber ? '✓' : '○'} Có ít nhất
+            một chữ số
+          </div>
         </div>
 
         <div className="portal-form-group">
@@ -218,32 +404,62 @@ export function LuxuryRegisterForm() {
               marginBottom: '6px',
             }}
           >
-            <label className="portal-label" style={{ margin: 0 }}>
+            <label
+              className="portal-label"
+              style={{ margin: 0 }}
+            >
               Xác Nhận Mật Khẩu
             </label>
 
             <button
               type="button"
-              onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+              disabled={
+                registrationAlreadyCreated ||
+                isSubmitting
+              }
+              onClick={() =>
+                setShowConfirmPassword(
+                  (current) => !current,
+                )
+              }
               style={{
                 background: 'none',
                 border: 'none',
                 fontSize: '0.72rem',
                 color: '#8C847C',
-                cursor: 'pointer',
+                cursor:
+                  registrationAlreadyCreated ||
+                  isSubmitting
+                    ? 'default'
+                    : 'pointer',
                 padding: 0,
               }}
             >
-              {showConfirmPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+              {showConfirmPassword
+                ? 'Ẩn mật khẩu'
+                : 'Hiện mật khẩu'}
             </button>
           </div>
 
           <input
-            type={showConfirmPassword ? 'text' : 'password'}
+            type={
+              showConfirmPassword
+                ? 'text'
+                : 'password'
+            }
             className="portal-input"
             placeholder="Nhập lại mật khẩu"
             value={confirmPassword}
-            onChange={(e) => setConfirmPassword(e.target.value)}
+            disabled={
+              registrationAlreadyCreated ||
+              isSubmitting
+            }
+            onChange={(e) =>
+              setConfirmPassword(
+                e.target.value,
+              )
+            }
+            autoComplete="new-password"
           />
 
           {confirmPassword && (
@@ -251,7 +467,9 @@ export function LuxuryRegisterForm() {
               style={{
                 marginTop: '7px',
                 fontSize: '0.76rem',
-                color: passwordsMatch ? '#166534' : '#B91C1C',
+                color: passwordsMatch
+                  ? '#166534'
+                  : '#B91C1C',
               }}
             >
               {passwordsMatch
@@ -264,11 +482,33 @@ export function LuxuryRegisterForm() {
         <button
           type="submit"
           className="luxury-login-submit-btn"
+          disabled={isSubmitting}
+          aria-busy={isSubmitting}
+          style={{
+            opacity: isSubmitting ? 0.7 : 1,
+            cursor: isSubmitting
+              ? 'wait'
+              : 'pointer',
+          }}
         >
-          <span>TẠO TÀI KHOẢN HỘI VIÊN</span>
-          <span className="submit-arrow" aria-hidden="true">
-            →
+          <span>
+            {isSubmitting
+              ? registrationAlreadyCreated
+                ? 'ĐANG GỬI OTP...'
+                : 'ĐANG TẠO TÀI KHOẢN...'
+              : registrationAlreadyCreated
+                ? 'GỬI LẠI MÃ OTP'
+                : 'TẠO TÀI KHOẢN HỘI VIÊN'}
           </span>
+
+          {!isSubmitting && (
+            <span
+              className="submit-arrow"
+              aria-hidden="true"
+            >
+              →
+            </span>
+          )}
         </button>
       </form>
 
