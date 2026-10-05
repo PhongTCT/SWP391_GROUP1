@@ -34,6 +34,12 @@ export interface SendOtpResponse {
   debugOtp?: string;
 }
 
+export interface VerifyOtpResponse {
+  message: string;
+  target: string;
+  isVerified: boolean;
+}
+
 // ============================================================
 // API ERROR
 // ============================================================
@@ -66,7 +72,8 @@ export class ApiClientError extends Error {
 // CONFIG
 // ============================================================
 
-export const AUTH_STORAGE_KEY = 'fitcenter_auth_session';
+export const AUTH_STORAGE_KEY =
+  'fitcenter_auth_session';
 
 const API_BASE_URL =
   import.meta.env.VITE_API_BASE_URL ??
@@ -127,11 +134,13 @@ async function throwApiError(
   if (!message) {
     switch (response.status) {
       case 400:
-        message = 'Thông tin gửi lên không hợp lệ.';
+        message =
+          'Thông tin gửi lên không hợp lệ.';
         break;
 
       case 401:
-        message = 'Bạn chưa được xác thực.';
+        message =
+          'Bạn chưa được xác thực.';
         break;
 
       case 403:
@@ -241,7 +250,7 @@ export async function loginApi(
   identifier: string,
   password: string,
 ): Promise<LoginResponse> {
-  // Giả lập độ trễ mạng
+  // Giả lập độ trễ mạng.
   await new Promise((resolve) =>
     setTimeout(resolve, 600),
   );
@@ -249,7 +258,7 @@ export async function loginApi(
   const cleanId =
     identifier.trim().toLowerCase();
 
-  // Validate nghiệp vụ mẫu
+  // Validate nghiệp vụ mẫu.
   if (password === 'wrongpass') {
     const error = new Error(
       'Tài khoản hoặc mật khẩu không chính xác.',
@@ -262,7 +271,7 @@ export async function loginApi(
     throw error;
   }
 
-  // Tự động phân vai trò để test luồng US01
+  // Tự động phân vai trò để test luồng US01.
   let role: UserSession['role'];
   let name: string;
 
@@ -328,14 +337,6 @@ export async function loginApi(
  * Backend:
  *
  * POST /api/v1/auth/register
- *
- * Request:
- * {
- *   username,
- *   password,
- *   email,
- *   role
- * }
  */
 export async function registerApi(
   payload: RegisterRequestPayload,
@@ -365,18 +366,17 @@ export async function registerApi(
 // ============================================================
 
 /**
- * Backend hiện tại:
+ * Backend:
  *
  * POST /api/v1/auth/send-otp
  *
- * OtpRequest:
+ * Request:
  * {
  *   email,
  *   phoneNumber
  * }
  *
- * Registration hiện tại dùng email,
- * nên SCRUM-40 gửi OTP qua email.
+ * Registration hiện tại dùng email.
  */
 export async function sendOtpApi(
   email: string,
@@ -388,6 +388,38 @@ export async function sendOtpApi(
         email.trim().toLowerCase(),
 
       phoneNumber: null,
+    },
+  );
+}
+
+// ============================================================
+// US03 / SCRUM-47 - VERIFY OTP
+// ============================================================
+
+/**
+ * Backend:
+ *
+ * POST /api/v1/auth/verify-otp
+ *
+ * Request:
+ * {
+ *   target,
+ *   otpCode
+ * }
+ *
+ * Nếu OTP đúng, backend sẽ kích hoạt tài khoản.
+ */
+export async function verifyOtpApi(
+  target: string,
+  otpCode: string,
+): Promise<VerifyOtpResponse> {
+  return postJson<VerifyOtpResponse>(
+    '/auth/verify-otp',
+    {
+      target:
+        target.trim().toLowerCase(),
+
+      otpCode,
     },
   );
 }

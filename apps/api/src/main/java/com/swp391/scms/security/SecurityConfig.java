@@ -1,5 +1,7 @@
 package com.swp391.scms.security;
 
+import jakarta.servlet.DispatcherType;
+
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -15,26 +17,47 @@ import org.springframework.security.web.SecurityFilterChain;
 public class SecurityConfig {
 
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    public SecurityFilterChain securityFilterChain(
+            HttpSecurity http
+    ) throws Exception {
+
         http
             .csrf(csrf -> csrf.disable())
+
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/api/v1/auth/**", "/api/v1/health", "/swagger-ui/**", "/v3/api-docs/**").permitAll()
+
+                // Cho phép Spring xử lý response lỗi như 429, 400...
+                .dispatcherTypeMatchers(
+                    DispatcherType.ERROR
+                ).permitAll()
+
+                // Các API public.
+                .requestMatchers(
+                    "/api/v1/auth/**",
+                    "/api/v1/health",
+                    "/swagger-ui/**",
+                    "/v3/api-docs/**",
+                    "/error"
+                ).permitAll()
+
+                // Các API còn lại cần đăng nhập.
                 .anyRequest().authenticated()
             );
-            
+
         return http.build();
     }
 
-    // Cung cấp công cụ mã hóa mật khẩu cho toàn hệ thống
+    // Mã hóa mật khẩu.
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
-    // Cung cấp AuthenticationManager để AuthController gọi hàm Login
+    // AuthenticationManager dùng cho đăng nhập.
     @Bean
-    public AuthenticationManager authenticationManager(AuthenticationConfiguration config) throws Exception {
+    public AuthenticationManager authenticationManager(
+            AuthenticationConfiguration config
+    ) throws Exception {
         return config.getAuthenticationManager();
     }
 }
